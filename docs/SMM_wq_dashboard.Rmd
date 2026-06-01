@@ -1,0 +1,188 @@
+---
+title: "Susiun Managed Wetlands Water Quality Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+runtime: shiny
+---
+
+Page 1: Map
+=====================================
+
+```{r}
+vars <- c(
+  "chlorophyll_ug_l", 
+  "f_dom_qsu", 
+  "odo_mg_l", 
+  "sp_cond_am_s_cm",
+  "tal_pc_ug_l", 
+  "turbidity_fnu", 
+  "p_h", 
+  "temp_a_c"
+)
+
+selectInput(
+  "param",
+  "Select Parameter:",
+  choices = vars,
+  selected = "chlorophyll_ug_l"
+)
+
+### Map
+
+```
+
+```{r}
+library(leaflet)
+library(dplyr)
+library(scales)
+
+smst <- read.csv(
+  "../data/2026-01-26_Managed_Wetland_Scouting_Trip_a.csv",
+  skip = 1,
+  fileEncoding = "latin1",
+  encoding = "UTF-8",
+  check.names = FALSE
+)
+
+names(smst) <- iconv(names(smst), from = "latin1", to = "UTF-8")
+names(smst) <- janitor::make_clean_names(names(smst))
+
+df <- smst
+
+leafletOutput("map", height = "700px")
+
+### Server logic for the map
+
+```
+
+```{r}
+output$map <- renderLeaflet({
+  leaflet(df) |>
+    addProviderTiles("Esri.WorldImagery", group = "Satellite") |>
+    addProviderTiles("OpenStreetMap", group = "OSM") |>
+    setView(
+      lng = mean(df$gps_longitude_a),
+      lat = mean(df$gps_latitude_a),
+      zoom = 13
+    )
+})
+
+observe({
+  req(input$param)   # <-- prevents the observer from running too early
+  
+  param <- input$param
+  pal <- colorNumeric("viridis", df[[param]], na.color = "gray50")
+
+  leafletProxy("map", data = df) |>
+    clearMarkers() |>
+    clearControls() |>
+    addCircleMarkers(
+      lng = ~gps_longitude_a,
+      lat = ~gps_latitude_a,
+      radius = 6,
+      color = ~pal(df[[param]]),
+      fillOpacity = 0.8,
+      popup = ~paste0(
+        "<b>", param, ":</b> ", df[[param]], "<br>",
+        "<b>Date:</b> ", date_mm_dd_yyyy, "<br>",
+        "<b>Time:</b> ", time_hh_mm_ss
+      )
+    ) |>
+    addLegend(
+      position = "bottomright",
+      pal = pal,
+      values = df[[param]],
+      title = param
+    ) |>
+    addLayersControl(
+      baseGroups = c("Satellite", "OSM"),
+      options = layersControlOptions(collapsed = FALSE)
+    )
+})
+
+```
+
+
+Page 2: Continuous Water Quality
+=====================================
+```{r}
+library(tidyverse)
+library(cder)
+library(dataRetrieval)
+library(plotly)
+library(lubridate)
+
+# CDEC
+Meins <- cdec_query(
+  "MEI",
+  sensors = c(266,25,62,221,28,61,275,100),
+  start.date = ymd("2026-04-01"),
+  end.date = today()
+) |>
+  mutate(Value = case_when(
+    SensorType == "TEMP W" ~ (Value - 32) * 5/9,
+    TRUE ~ Value
+  ))
+
+# USGS
+USGSstations <- read_waterdata_continuous(
+  monitoring_location_id = c(
+    "USGS-11455730",
+    "USGS-381126121554801",
+    "USGS-381154121545401"
+  ),
+  time = c("2026-01-01", "2026-05-21")
+)
+
+USGS <- USGSstations |>
+  rename(
+    StationID = monitoring_location_id,
+    SensorNumber = parameter_code,
+    DateTime = time,
+    Value = value,
+    SensorUnits = unit_of_measure
+  ) |>
+  mutate(
+    SensorType = case_when(
+      SensorUnits == "%" ~ "DO Percent",
+      SensorUnits == "pH Units" ~ "PH VAL",
+      SensorUnits == "mg/l" ~ "DIS OXY",
+      SensorUnits == "uS/cm" ~ "EL COND",
+      SensorUnits == "ug/l" ~ "CHLORPH",
+      SensorUnits == "degC" ~ "TEMP W",
+      SensorUnits == "QSE" ~ "FDOM",
+      SensorUnits == "RFU" ~ "FLURFUB",
+      SensorUnits == "_FNU" ~ "TURB WF"
+    ),
+    Station = case_match(
+      StationID,
+      "USGS-11455730" ~ "Lower Joice Island",
+      "USGS-381126121554801" ~ "Nurse Slough",
+      "USGS-381154121545401" ~ "Denverton"
+    )
+  )
+
+# Combine
+allWQ <- bind_rows(
+  USGS,
+  Meins |> mutate(Station = "Meins Interior", SensorNumber = as.character(SensorNumber))
+)
+
+### Interactive plot
+
+```
+
+```{r}
+output$wqplot <- renderPlotly({
+  p <- ggplot(allWQ, aes(x = DateTime, y = Value, color = Station)) +
+    geom_line() +
+    facet_wrap(~SensorType, scales = "free_y") +
+    theme_bw()
+
+  ggplotly(p)
+})
+
+plotlyOutput("wqplot", height = "800px")
+```

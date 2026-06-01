@@ -1,0 +1,248 @@
+---
+title: "Wetland Water Quality Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+---
+<style>
+.legend-bar {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  padding: 10px 0;
+  justify-content: center;
+  flex-wrap: wrap;
+  background: #f8f8f8;
+  border-top: 1px solid #ccc;
+}
+
+.legend-item {
+  text-align: center;
+  font-size: 12px;
+}
+
+.legend-img {
+  width: 140px;
+  height: 12px;
+  display: block;
+  margin: 4px auto;
+  border: 1px solid #ccc;
+}
+</style>
+
+
+
+```{r}
+library(flexdashboard)
+library(htmltools)
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+library(scales)
+library(janitor)
+library(plotly)
+library(cder)
+library(dataRetrieval)
+
+# ---- POINT DATA FOR MAP ----
+
+smst <- read.csv(
+  "../data/2026-01-26_Managed_Wetland_Scouting_Trip_a.csv",
+  skip = 1,
+  fileEncoding = "latin1",
+  encoding = "UTF-8",
+  check.names = FALSE
+)
+
+names(smst) <- iconv(names(smst), from = "latin1", to = "UTF-8")
+names(smst) <- janitor::make_clean_names(names(smst))
+
+df <- smst
+
+vars <- c(
+  "chlorophyll_ug_l", 
+  "f_dom_qsu", 
+  "odo_mg_l", 
+  "sp_cond_am_s_cm",
+  "tal_pc_ug_l", 
+  "turbidity_fnu", 
+  "p_h", 
+  "temp_a_c"
+)
+
+legend_positions <- c(
+  "chlorophyll_ug_l" = "bottomright",
+  "f_dom_qsu"        = "bottomleft",
+  "odo_mg_l"         = "topright",
+  "sp_cond_am_s_cm"  = "topleft",
+  "tal_pc_ug_l"      = "bottomright",
+  "turbidity_fnu"    = "bottomleft",
+  "p_h"              = "topright",
+  "temp_a_c"         = "topleft"
+)
+
+
+# palettes for each parameter
+pal_list <- lapply(vars, function(v) {
+  colorNumeric("viridis", df[[v]], na.color = "gray50")
+})
+names(pal_list) <- vars
+
+# ---- CONTINUOUS WATER QUALITY DATA ----
+
+# CDEC
+Meins <- cdec_query(
+  "MEI",
+  sensors = c(
+    266, # FDOM
+    25,  # water temperature in F
+    62,  # pH
+    221, # turbidity FNU
+    28,  # Chlorophyll
+    61,  # dissolved oxygen mg/L
+    275, # phycocyanin fluorescence
+    100  # EC uS/cm
+  ),
+  start.date = ymd("2026-04-01"),
+  end.date = today()
+) |>
+  mutate(
+    Value = case_when(
+      SensorType == "TEMP W" ~ (Value - 32) * 5/9,
+      TRUE ~ Value
+    )
+  )
+
+# USGS
+USGSstations <- read_waterdata_continuous(
+  monitoring_location_id = c(
+    "USGS-11455730",
+    "USGS-381126121554801",
+    "USGS-381154121545401"
+  ),
+  time = c("2026-01-01", "2026-05-21")
+)
+
+USGS <- USGSstations |>
+  rename(
+    StationID    = monitoring_location_id,
+    SensorNumber = parameter_code,
+    DateTime     = time,
+    Value        = value,
+    SensorUnits  = unit_of_measure
+  ) |>
+  mutate(
+    SensorType = case_when(
+      SensorUnits == "%"       ~ "DO Percent",
+      SensorUnits == "pH Units"~ "PH VAL",
+      SensorUnits == "mg/l"    ~ "DIS OXY",
+      SensorUnits == "uS/cm"   ~ "EL COND",
+      SensorUnits == "ug/l"    ~ "CHLORPH",
+      SensorUnits == "degC"    ~ "TEMP W",
+      SensorUnits == "QSE"     ~ "FDOM",
+      SensorUnits == "RFU"     ~ "FLURFUB",
+      SensorUnits == "_FNU"    ~ "TURB WF",
+      TRUE                     ~ SensorUnits
+    ),
+    Station = case_match(
+      StationID,
+      "USGS-11455730" ~ "Lower Joice Island",
+      "USGS-381126121554801" ~ "Nurse Slough",
+      "USGS-381154121545401" ~ "Denverton",
+      .default = StationID
+    )
+
+  )
+
+allWQ <- bind_rows(
+  USGS,
+  Meins |>
+    mutate(
+      Station      = "Meins Interior",
+      SensorNumber = as.character(SensorNumber)
+    )
+)
+```
+Page 1: Map
+=====================================
+
+```{r}
+m <- leaflet(df) |>
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") |>
+  addProviderTiles("OpenStreetMap", group = "OSM")
+
+for (v in vars) {
+  pal <- pal_list[[v]]
+
+  m <- m |>
+    addCircleMarkers(
+      data = df,
+      lng = ~gps_longitude_a,
+      lat = ~gps_latitude_a,
+      radius = 6,
+      color = ~pal(df[[v]]),
+      fillOpacity = 0.8,
+      popup = ~paste0(
+        "<b>", v, ":</b> ", df[[v]], "<br>",
+        "<b>Date:</b> ", date_mm_dd_yyyy, "<br>",
+        "<b>Time:</b> ", time_hh_mm_ss
+      ),
+      group = v
+    )
+}
+
+m |>
+  addLayersControl(
+    baseGroups    = c("Satellite", "OSM"),
+    overlayGroups = vars,
+    options       = layersControlOptions(collapsed = FALSE)
+  )
+legend_files <- list()
+
+for (v in vars) {
+  pal <- pal_list[[v]]
+  png_file <- tempfile(fileext = ".png")
+
+  # Create a 1x100 color bar
+  z <- matrix(seq(0, 1, length.out = 100), nrow = 1)
+
+  png(png_file, width = 400, height = 30)
+  par(mar = c(0, 0, 0, 0))  # no margins
+  plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "",
+       xlim = c(0, 1), ylim = c(0, 1))
+  rasterImage(
+    pal(seq(min(df[[v]], na.rm = TRUE),
+            max(df[[v]], na.rm = TRUE),
+            length.out = 100)),
+    0, 0, 1, 1
+  )
+  dev.off()
+
+  legend_files[[v]] <- png_file
+}
+
+
+div(class = "legend-bar",
+    lapply(vars, function(v) {
+      div(class = "legend-item",
+          tags$div(v),
+          tags$img(src = legend_files[[v]], class = "legend-img")
+      )
+    })
+)
+
+```
+
+Page 2: Continuous Water Quality
+=====================================
+
+```{r}
+p <- ggplot(allWQ, aes(x = DateTime, y = Value, color = Station)) +
+  geom_line() +
+  facet_wrap(~SensorType, scales = "free_y") +
+  theme_bw() +
+  labs(x = "Date", y = "Value", color = "Station")
+
+ggplotly(p)
+```
