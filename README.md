@@ -1,4 +1,4 @@
 ### Suisun Managed Wetlands Water Quality Dashboard
 
 View the dashboard here:  
-[SMM Water Quality Dashboard](docs/SMM_wq_dashboard_static.html)
+https://ericholmes.github.io/Suisun_managed_wetlands/SMM_wq_dashboard_static
