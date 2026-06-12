@@ -90,7 +90,8 @@ pal_list <- lapply(vars, function(v) {
 names(pal_list) <- vars
 
 # ---- CONTINUOUS WATER QUALITY DATA ----
-
+start_date <- ymd("2026-04-01")
+end_date   <- today()
 # CDEC
 Meins <- cdec_query(
   "MEI",
@@ -104,8 +105,8 @@ Meins <- cdec_query(
     275, # phycocyanin fluorescence
     100  # EC uS/cm
   ),
-  start.date = ymd("2026-04-01"),
-  end.date = today()
+  start.date = start_date,
+  end.date = end_date
 ) |>
   mutate(
     Value = case_when(
@@ -121,7 +122,7 @@ USGSstations <- read_waterdata_continuous(
     "USGS-381126121554801",
     "USGS-381154121545401"
   ),
-  time = c("2026-01-01", "2026-05-21")
+  time = c(start_date, end_date)
 )
 
 USGS <- USGSstations |>
