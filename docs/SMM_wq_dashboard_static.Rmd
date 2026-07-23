@@ -46,6 +46,7 @@ library(cder)
 library(dataRetrieval)
 
 # ---- POINT DATA FOR MAP ----
+sondes <- readxl::read_excel("C:/Users/eholmes/Documents/R/Projects/Suisun_managed_wetlands/data/Suisun_sondes_all.xlsx")
 
 smst <- read.csv(
   "../data/2026-01-26_Managed_Wetland_Scouting_Trip_a.csv",
@@ -169,14 +170,23 @@ Page 1: Map
 =====================================
 
 ```{r}
-m <- leaflet(df) |>
-  addProviderTiles("Esri.WorldImagery", group = "Satellite") |>
+# ----------------------------
+# Base map
+# ----------------------------
+
+m <- leaflet() %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
   addProviderTiles("OpenStreetMap", group = "OSM")
+
+
+# ----------------------------
+# Add variable layers (hidden by default)
+# ----------------------------
 
 for (v in vars) {
   pal <- pal_list[[v]]
 
-  m <- m |>
+  m <- m %>%
     addCircleMarkers(
       data = df,
       lng = ~gps_longitude_a,
@@ -193,23 +203,62 @@ for (v in vars) {
     )
 }
 
-m |>
+# Hide all variable layers initially
+for (v in vars) {
+  m <- m %>% hideGroup(v)
+}
+
+
+# ----------------------------
+# Add your custom USGS Sites layer
+# ----------------------------
+
+m <- m %>%
+  addCircleMarkers(
+    data = sondes,
+    lng = ~Lon,
+    lat = ~Lat,
+    radius = 6,
+    color = "yellow",
+    fillColor = "red",
+    fillOpacity = 0.8,
+    stroke = TRUE,
+    weight = 2,
+    popup = ~paste0(
+      "<b>Site Name:</b> ", Site_name, "<br>",
+      "<b>Site Code:</b> ", Site_code, "<br>",
+      "<b>Agency:</b> ", Agency
+    ),
+    group = "Sonde Sites"
+  )
+
+
+# ----------------------------
+# Add layer control
+# ----------------------------
+
+m <- m %>%
   addLayersControl(
     baseGroups    = c("Satellite", "OSM"),
-    overlayGroups = vars,
+    overlayGroups = c("Sonde Sites", vars),
     options       = layersControlOptions(collapsed = FALSE)
   )
+
+
+# ----------------------------
+# Create legend strips for each variable
+# ----------------------------
+
 legend_files <- list()
 
 for (v in vars) {
   pal <- pal_list[[v]]
   png_file <- tempfile(fileext = ".png")
 
-  # Create a 1x100 color bar
   z <- matrix(seq(0, 1, length.out = 100), nrow = 1)
 
   png(png_file, width = 400, height = 30)
-  par(mar = c(0, 0, 0, 0))  # no margins
+  par(mar = c(0, 0, 0, 0))
   plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "",
        xlim = c(0, 1), ylim = c(0, 1))
   rasterImage(
@@ -223,27 +272,31 @@ for (v in vars) {
   legend_files[[v]] <- png_file
 }
 
-
-div(class = "legend-bar",
-    lapply(vars, function(v) {
-      div(class = "legend-item",
-          tags$div(v),
-          tags$img(src = legend_files[[v]], class = "legend-img")
-      )
-    })
+legend_div <- div(
+  class = "legend-bar",
+  lapply(vars, function(v) {
+    div(
+      class = "legend-item",
+      tags$div(v),
+      tags$img(src = legend_files[[v]], class = "legend-img")
+    )
+  })
 )
 
+# Display map + legend
+tagList(m, legend_div)
 ```
 
 Page 2: Continuous Water Quality
 =====================================
 
 ```{r}
-p <- ggplot(allWQ, aes(x = DateTime, y = Value, color = Station)) +
+p <- ggplot(allWQ[!(allWQ$SensorType %in% "FLURFUB"),], aes(x = DateTime, y = Value, color = Station)) +
   geom_line() +
   facet_wrap(~SensorType, scales = "free_y") +
   theme_bw() +
   labs(x = "Date", y = "Value", color = "Station")
 
 ggplotly(p)
+
 ```
